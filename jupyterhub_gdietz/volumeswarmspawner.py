@@ -3,12 +3,28 @@ from textwrap import dedent
 
 from docker.types import Mount, DriverConfig
 
-from traitlets import HasTraits, Unicode
+from traitlets import Dict, Unicode
 
 from dockerspawner import SwarmSpawner
 
 
 class VolumeSwarmSpawner(SwarmSpawner):
+
+    non_admin_read_only_volumes = Dict(
+        config=True,
+        help=dedent(
+            """
+            Map from host file/directory to container file/directory.
+            Volumes specified here will be read-only in the container for non-admins
+            and writable for admins.
+            If format_volume_name is not set,
+            default_format_volume_name is used for naming volumes.
+            In this case, if you use {username} in either the host or guest
+            file/directory path, it will be replaced with the current
+            user's name.
+            """
+        ),
+    )
 
     hub_volume_local_path = Unicode(
         config=True,
@@ -21,7 +37,12 @@ class VolumeSwarmSpawner(SwarmSpawner):
             """
         ),
     )
-    
+
+    @property
+    def volume_binds(self):
+        binds = super().volume_binds
+        return self._volumes_to_binds(self.non_admin_read_only_volumes, binds, mode="non-admin-ro")
+
     def hub_volume_local_path_for_volume(self, volume_name):
         return self.hub_volume_local_path.format(volume_name=volume_name)
     
@@ -35,6 +56,9 @@ class VolumeSwarmSpawner(SwarmSpawner):
         return DriverConfig(
             name=self.volume_driver, options=self.volume_driver_options_for_volume_name(volume_name) or None
         )
+
+    def volume_mode_read_only(self, vol_mode):
+        return vol_mode == "ro" or ((not self.user.admin) and vol_mode == "non-admin-ro")
 
     @property
     def mounts(self):
@@ -51,7 +75,7 @@ class VolumeSwarmSpawner(SwarmSpawner):
                     target=vol["bind"],
                     source=volume_name,
                     type="volume",
-                    read_only=vol["mode"] == "ro",
+                    read_only=self.volume_mode_read_only(vol["mode"]),
                     driver_config=self.mount_driver_config_for_volume(volume_name),
                 )
                 for volume_name, vol in binds
